@@ -447,13 +447,16 @@ def update_progress_label():
         connection.close()
 
         if total_tasks == 0:
-            progress_text.set("Progress: 0.0% completed")
+            completion_rate = 0
         else:
             completion_rate = (completed_tasks / total_tasks) * 100
-            progress_text.set(f"Progress: {completion_rate:.1f}% completed")
+
+        progress_text.set(f"Progress: {completion_rate:.1f}% completed")
+        progress_bar["value"] = completion_rate
 
     except Exception as e:
         progress_text.set("Progress: Error")
+        progress_bar["value"] = 0
 
 root = tk.Tk()
 progress_text = tk.StringVar()
@@ -466,6 +469,9 @@ title.pack(pady=20)
 
 progress_label = tk.Label(root, textvariable=progress_text, font=("Arial", 12))
 progress_label.pack(pady=10)
+
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
+progress_bar.pack(pady=5)
 
 task_frame = tk.Frame(root)
 task_frame.pack(pady=20)
@@ -513,12 +519,6 @@ timetable_button.pack(pady=10)
 
 table_button = tk.Button(root, text="Open Task Table", command=open_task_table)
 table_button.pack(pady=10)
-
-complete_button = tk.Button(root, text="Mark First Task Completed", command=mark_task_completed)
-complete_button.pack(pady=10)
-
-delete_button = tk.Button(root, text="Delete First Task", command=delete_first_task)
-delete_button.pack(pady=10)
 
 progress_button = tk.Button(root, text="Show Progress", command=show_progress)
 progress_button.pack(pady=10)
