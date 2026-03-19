@@ -1,6 +1,6 @@
 import sqlite3
 import customtkinter as ctk
-from tkinter import messagebox, ttk 
+from tkinter import messagebox, ttk
 from datetime import datetime
 
 current_user_id = None
@@ -10,65 +10,61 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 app = ctk.CTk()
-app.title("Priority-Based Study Scheduler - Version 2")
+app.title("Study Scheduler")
 app.geometry("1400x800")
 
 
-# ---------- Page Functions ----------
+# ---------- Helper Functions ----------
 def clear_main_area():
     for widget in content_frame.winfo_children():
         widget.destroy()
 
 
-def show_dashboard_page():
-    clear_main_area()
+def get_task_stats():
+    global current_user_id
 
-    title = ctk.CTkLabel(
-        content_frame,
-        text="Dashboard",
-        font=ctk.CTkFont(size=28, weight="bold")
-    )
-    title.pack(anchor="w", padx=30, pady=(30, 10))
+    total_tasks = 0
+    completed_tasks = 0
+    pending_tasks = 0
+    progress = 0
 
-    subtitle = ctk.CTkLabel(
-        content_frame,
-        text="Welcome to your study planner dashboard",
-        font=ctk.CTkFont(size=16)
-    )
-    subtitle.pack(anchor="w", padx=30, pady=(0, 20))
+    try:
+        connection = sqlite3.connect("database/study_scheduler.db")
+        cursor = connection.cursor()
 
-    cards_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-    cards_frame.pack(padx=30, pady=20, fill="x")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM tasks
+            WHERE user_id = ?
+        """, (current_user_id,))
+        total_tasks = cursor.fetchone()[0]
 
-    card1 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#374151")
-    card1.grid(row=0, column=0, padx=15, pady=10)
-    ctk.CTkLabel(card1, text="Total Tasks\n0", font=ctk.CTkFont(size=22, weight="bold")).place(relx=0.5, rely=0.5, anchor="center")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM tasks
+            WHERE user_id = ? AND status = 'Completed'
+        """, (current_user_id,))
+        completed_tasks = cursor.fetchone()[0]
 
-    card2 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#374151")
-    card2.grid(row=0, column=1, padx=15, pady=10)
-    ctk.CTkLabel(card2, text="Completed\n0", font=ctk.CTkFont(size=22, weight="bold")).place(relx=0.5, rely=0.5, anchor="center")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM tasks
+            WHERE user_id = ? AND status = 'Pending'
+        """, (current_user_id,))
+        pending_tasks = cursor.fetchone()[0]
 
-    card3 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#374151")
-    card3.grid(row=0, column=2, padx=15, pady=10)
-    ctk.CTkLabel(card3, text="Pending\n0", font=ctk.CTkFont(size=22, weight="bold")).place(relx=0.5, rely=0.5, anchor="center")
+        connection.close()
 
-    progress_title = ctk.CTkLabel(
-        content_frame,
-        text="Overall Progress",
-        font=ctk.CTkFont(size=20, weight="bold")
-    )
-    progress_title.pack(anchor="w", padx=30, pady=(30, 10))
+        if total_tasks > 0:
+            progress = completed_tasks / total_tasks
+        else:
+            progress = 0
 
-    progress_bar = ctk.CTkProgressBar(content_frame, width=450)
-    progress_bar.pack(anchor="w", padx=30, pady=10)
-    progress_bar.set(0.4)
+    except Exception as e:
+        messagebox.showerror("Stats Error", str(e))
 
-    progress_text = ctk.CTkLabel(
-        content_frame,
-        text="40% Completed",
-        font=ctk.CTkFont(size=14)
-    )
-    progress_text.pack(anchor="w", padx=30, pady=5)
+    return total_tasks, completed_tasks, pending_tasks, progress
+
 
 def load_tasks_into_tree(tree):
     global current_user_id
@@ -96,6 +92,91 @@ def load_tasks_into_tree(tree):
     except Exception as e:
         messagebox.showerror("Load Error", str(e))
 
+
+def sidebar_button(parent, text, command):
+    return ctk.CTkButton(
+        parent,
+        text=text,
+        width=220,
+        height=42,
+        corner_radius=10,
+        fg_color="#374151",
+        hover_color="#4b5563",
+        anchor="w",
+        command=command
+    )
+
+
+# ---------- Page Functions ----------
+def show_dashboard_page():
+    clear_main_area()
+
+    total_tasks, completed_tasks, pending_tasks, progress = get_task_stats()
+
+    title = ctk.CTkLabel(
+        content_frame,
+        text="Dashboard",
+        font=ctk.CTkFont(size=28, weight="bold")
+    )
+    title.pack(anchor="w", padx=30, pady=(30, 10))
+
+    subtitle = ctk.CTkLabel(
+        content_frame,
+        text="Welcome to your study planner dashboard",
+        font=ctk.CTkFont(size=16),
+        text_color="gray"
+    )
+    subtitle.pack(anchor="w", padx=30, pady=(0, 20))
+
+    cards_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+    cards_frame.pack(padx=30, pady=20, fill="x")
+
+    card1 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#1f2937", corner_radius=15)
+    card1.grid(row=0, column=0, padx=15, pady=10)
+    card1.grid_propagate(False)
+    ctk.CTkLabel(
+        card1,
+        text=f"📋 Total Tasks\n{total_tasks}",
+        font=ctk.CTkFont(size=22, weight="bold")
+    ).place(relx=0.5, rely=0.5, anchor="center")
+
+    card2 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#1f2937", corner_radius=15)
+    card2.grid(row=0, column=1, padx=15, pady=10)
+    card2.grid_propagate(False)
+    ctk.CTkLabel(
+        card2,
+        text=f"✅ Completed\n{completed_tasks}",
+        font=ctk.CTkFont(size=22, weight="bold")
+    ).place(relx=0.5, rely=0.5, anchor="center")
+
+    card3 = ctk.CTkFrame(cards_frame, width=220, height=130, fg_color="#1f2937", corner_radius=15)
+    card3.grid(row=0, column=2, padx=15, pady=10)
+    card3.grid_propagate(False)
+    ctk.CTkLabel(
+        card3,
+        text=f"⏳ Pending\n{pending_tasks}",
+        font=ctk.CTkFont(size=22, weight="bold")
+    ).place(relx=0.5, rely=0.5, anchor="center")
+
+    progress_title = ctk.CTkLabel(
+        content_frame,
+        text="Overall Progress",
+        font=ctk.CTkFont(size=20, weight="bold")
+    )
+    progress_title.pack(anchor="w", padx=30, pady=(30, 10))
+
+    progress_bar = ctk.CTkProgressBar(content_frame, width=500)
+    progress_bar.pack(anchor="w", padx=30, pady=10)
+    progress_bar.set(progress)
+
+    progress_text = ctk.CTkLabel(
+        content_frame,
+        text=f"{round(progress * 100, 1)}% Completed",
+        font=ctk.CTkFont(size=14)
+    )
+    progress_text.pack(anchor="w", padx=30, pady=5)
+
+
 def show_tasks_page():
     clear_main_area()
 
@@ -106,7 +187,7 @@ def show_tasks_page():
     )
     title.pack(anchor="w", padx=30, pady=(30, 20))
 
-    form_frame = ctk.CTkFrame(content_frame, fg_color="#2b2b2b")
+    form_frame = ctk.CTkFrame(content_frame, fg_color="#2b2b2b", corner_radius=15)
     form_frame.pack(padx=30, pady=10, fill="x")
 
     ctk.CTkLabel(form_frame, text="Task Name").grid(row=0, column=0, padx=20, pady=15, sticky="w")
@@ -125,8 +206,7 @@ def show_tasks_page():
     hours_entry = ctk.CTkEntry(form_frame, width=250, placeholder_text="Enter study hours")
     hours_entry.grid(row=3, column=1, padx=20, pady=15)
 
-    # Table frame
-    table_frame = ctk.CTkFrame(content_frame)
+    table_frame = ctk.CTkFrame(content_frame, corner_radius=15)
     table_frame.pack(padx=30, pady=25, fill="both", expand=True)
 
     columns = ("ID", "Task Name", "Deadline", "Difficulty", "Hours", "Status")
@@ -135,8 +215,8 @@ def show_tasks_page():
     for col in columns:
         tree.heading(col, text=col)
 
-    tree.column("ID", width=50, anchor="center")
-    tree.column("Task Name", width=220, anchor="center")
+    tree.column("ID", width=60, anchor="center")
+    tree.column("Task Name", width=240, anchor="center")
     tree.column("Deadline", width=140, anchor="center")
     tree.column("Difficulty", width=100, anchor="center")
     tree.column("Hours", width=100, anchor="center")
@@ -162,8 +242,8 @@ def show_tasks_page():
             messagebox.showwarning("Invalid Date", "Please enter the deadline in YYYY-MM-DD format.")
             return
 
-        if not difficulty.isdigit():
-            messagebox.showwarning("Invalid Difficulty", "Difficulty must be a number.")
+        if not difficulty.isdigit() or not (1 <= int(difficulty) <= 5):
+            messagebox.showwarning("Invalid Difficulty", "Difficulty must be a number between 1 and 5.")
             return
 
         if not hours.isdigit():
@@ -206,7 +286,10 @@ def show_tasks_page():
         try:
             connection = sqlite3.connect("database/study_scheduler.db")
             cursor = connection.cursor()
-            cursor.execute("DELETE FROM tasks WHERE id = ? AND user_id = ?", (task_id, current_user_id))
+            cursor.execute(
+                "DELETE FROM tasks WHERE id = ? AND user_id = ?",
+                (task_id, current_user_id)
+            )
             connection.commit()
             connection.close()
 
@@ -247,16 +330,36 @@ def show_tasks_page():
     add_button = ctk.CTkButton(button_row, text="Add Task", width=160, command=add_task_v2)
     add_button.pack(side="left", padx=10)
 
-    refresh_button = ctk.CTkButton(button_row, text="Refresh Table", width=160, command=lambda: load_tasks_into_tree(tree))
+    refresh_button = ctk.CTkButton(
+        button_row,
+        text="Refresh Table",
+        width=160,
+        command=lambda: load_tasks_into_tree(tree)
+    )
     refresh_button.pack(side="left", padx=10)
 
-    complete_button = ctk.CTkButton(button_row, text="Mark Completed", width=160, command=mark_completed_v2)
+    complete_button = ctk.CTkButton(
+        button_row,
+        text="Mark Completed",
+        width=160,
+        fg_color="#16a34a",
+        hover_color="#15803d",
+        command=mark_completed_v2
+    )
     complete_button.pack(side="left", padx=10)
 
-    delete_button = ctk.CTkButton(button_row, text="Delete Selected", width=160, fg_color="red", hover_color="darkred", command=delete_selected_task_v2)
+    delete_button = ctk.CTkButton(
+        button_row,
+        text="Delete Selected",
+        width=160,
+        fg_color="red",
+        hover_color="darkred",
+        command=delete_selected_task_v2
+    )
     delete_button.pack(side="left", padx=10)
 
     load_tasks_into_tree(tree)
+
 
 def show_schedule_page():
     clear_main_area()
@@ -268,22 +371,34 @@ def show_schedule_page():
     )
     title.pack(anchor="w", padx=30, pady=(30, 20))
 
+    subtitle = ctk.CTkLabel(
+        content_frame,
+        text="Your weekly study plan will appear here",
+        font=ctk.CTkFont(size=14),
+        text_color="gray"
+    )
+    subtitle.pack(anchor="w", padx=30, pady=(0, 15))
+
     ctk.CTkButton(content_frame, text="Generate Weekly Schedule", width=220).pack(anchor="w", padx=30, pady=10)
 
-    schedule_frame = ctk.CTkFrame(content_frame)
+    schedule_frame = ctk.CTkFrame(content_frame, corner_radius=15)
     schedule_frame.pack(padx=30, pady=20, fill="both", expand=True)
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
     for i, day in enumerate(days):
-        day_box = ctk.CTkFrame(schedule_frame, width=140, height=400, fg_color="#374151")
+        day_box = ctk.CTkFrame(schedule_frame, width=140, height=400, fg_color="#1f2937", corner_radius=15)
         day_box.grid(row=0, column=i, padx=8, pady=10, sticky="n")
+        day_box.grid_propagate(False)
+
         ctk.CTkLabel(day_box, text=day, font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        ctk.CTkLabel(day_box, text="No sessions yet", font=ctk.CTkFont(size=12)).pack(pady=20)
+        ctk.CTkLabel(day_box, text="No sessions yet", font=ctk.CTkFont(size=12), text_color="gray").pack(pady=20)
 
 
 def show_progress_page():
     clear_main_area()
+
+    total_tasks, completed_tasks, pending_tasks, progress = get_task_stats()
 
     title = ctk.CTkLabel(
         content_frame,
@@ -292,20 +407,29 @@ def show_progress_page():
     )
     title.pack(anchor="w", padx=30, pady=(30, 20))
 
-    ctk.CTkLabel(content_frame, text="Completion Progress", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", padx=30, pady=10)
+    ctk.CTkLabel(
+        content_frame,
+        text="Completion Progress",
+        font=ctk.CTkFont(size=18, weight="bold")
+    ).pack(anchor="w", padx=30, pady=10)
 
     progress_bar = ctk.CTkProgressBar(content_frame, width=500)
     progress_bar.pack(anchor="w", padx=30, pady=10)
-    progress_bar.set(0.6)
+    progress_bar.set(progress)
 
-    ctk.CTkLabel(content_frame, text="60% of tasks completed", font=ctk.CTkFont(size=14)).pack(anchor="w", padx=30, pady=5)
+    ctk.CTkLabel(
+        content_frame,
+        text=f"{round(progress * 100, 1)}% of tasks completed",
+        font=ctk.CTkFont(size=14)
+    ).pack(anchor="w", padx=30, pady=5)
 
-    stats_box = ctk.CTkFrame(content_frame, fg_color="#374151")
+    stats_box = ctk.CTkFrame(content_frame, fg_color="#1f2937", corner_radius=15)
     stats_box.pack(padx=30, pady=25, fill="x")
 
-    ctk.CTkLabel(stats_box, text="Total Tasks: 10", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
-    ctk.CTkLabel(stats_box, text="Completed Tasks: 6", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
-    ctk.CTkLabel(stats_box, text="Pending Tasks: 4", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
+    ctk.CTkLabel(stats_box, text=f"📋 Total Tasks: {total_tasks}", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
+    ctk.CTkLabel(stats_box, text=f"✅ Completed Tasks: {completed_tasks}", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
+    ctk.CTkLabel(stats_box, text=f"⏳ Pending Tasks: {pending_tasks}", font=ctk.CTkFont(size=16)).pack(anchor="w", padx=20, pady=10)
+
 
 def show_register():
     register_window = ctk.CTkToplevel(app)
@@ -314,7 +438,7 @@ def show_register():
 
     title_label = ctk.CTkLabel(
         register_window,
-        text="Register New User",
+        text="Create Account",
         font=ctk.CTkFont(size=24, weight="bold")
     )
     title_label.pack(pady=(30, 20))
@@ -373,6 +497,7 @@ def show_register():
     )
     register_button.pack(pady=20)
 
+
 def show_login():
     for widget in app.winfo_children():
         widget.destroy()
@@ -382,15 +507,16 @@ def show_login():
 
     title_label = ctk.CTkLabel(
         login_frame,
-        text="Login",
+        text="Study Scheduler",
         font=ctk.CTkFont(size=30, weight="bold")
     )
     title_label.pack(pady=(35, 15))
 
     subtitle_label = ctk.CTkLabel(
         login_frame,
-        text="Priority-Based Study Scheduler",
-        font=ctk.CTkFont(size=15)
+        text="Plan Smart. Study Better.",
+        font=ctk.CTkFont(size=15),
+        text_color="gray"
     )
     subtitle_label.pack(pady=(0, 20))
 
@@ -422,7 +548,7 @@ def show_login():
 
             if user:
                 global current_user_id
-                current_user_id = user[0]   # user id from database
+                current_user_id = user[0]
                 show_main_app()
             else:
                 messagebox.showerror("Login Failed", "Invalid username or password.")
@@ -430,7 +556,6 @@ def show_login():
         except Exception as e:
             messagebox.showerror("Login Error", str(e))
 
-    
     login_button = ctk.CTkButton(
         login_frame,
         text="Login",
@@ -443,14 +568,14 @@ def show_login():
     login_button.pack(pady=(20, 10))
 
     register_button = ctk.CTkButton(
-    login_frame,
-    text="Register",
-    width=300,
-    height=42,
-    fg_color="#4b5563",
-    hover_color="#374151",
-    command=show_register
-)
+        login_frame,
+        text="Register",
+        width=300,
+        height=42,
+        fg_color="#4b5563",
+        hover_color="#374151",
+        command=show_register
+    )
     register_button.pack(pady=10)
 
 
@@ -460,34 +585,55 @@ def show_main_app():
     for widget in app.winfo_children():
         widget.destroy()
 
-    sidebar = ctk.CTkFrame(app, width=400, corner_radius=0, fg_color="#1f2937")
+    sidebar = ctk.CTkFrame(app, width=280, corner_radius=0, fg_color="#111827")
     sidebar.pack(side="left", fill="y")
+    sidebar.pack_propagate(False)
+
+    logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+    logo_frame.pack(pady=(30, 20))
+
+    logo_icon = ctk.CTkLabel(
+        logo_frame,
+        text="📚",
+        font=ctk.CTkFont(size=32)
+    )
+    logo_icon.pack()
 
     logo_label = ctk.CTkLabel(
-        sidebar,
+        logo_frame,
         text="Study Scheduler",
-        font=ctk.CTkFont(size=24, weight="bold")
+        font=ctk.CTkFont(size=20, weight="bold")
     )
-    logo_label.pack(pady=(30, 30))
+    logo_label.pack()
 
-    dashboard_button = ctk.CTkButton(sidebar, text="Dashboard", width=180, command=show_dashboard_page)
-    dashboard_button.pack(pady=10)
+    tagline = ctk.CTkLabel(
+        logo_frame,
+        text="Plan Smart. Study Better.",
+        font=ctk.CTkFont(size=12),
+        text_color="gray"
+    )
+    tagline.pack(pady=(5, 10))
 
-    tasks_button = ctk.CTkButton(sidebar, text="Task Management", width=180, command=show_tasks_page)
-    tasks_button.pack(pady=10)
+    dashboard_button = sidebar_button(sidebar, "📊 Dashboard", show_dashboard_page)
+    dashboard_button.pack(pady=8)
 
-    schedule_button = ctk.CTkButton(sidebar, text="Weekly Schedule", width=180, command=show_schedule_page)
-    schedule_button.pack(pady=10)
+    tasks_button = sidebar_button(sidebar, "📝 Task Management", show_tasks_page)
+    tasks_button.pack(pady=8)
 
-    progress_button = ctk.CTkButton(sidebar, text="Progress", width=180, command=show_progress_page)
-    progress_button.pack(pady=10)
+    schedule_button = sidebar_button(sidebar, "📅 Weekly Schedule", show_schedule_page)
+    schedule_button.pack(pady=8)
+
+    progress_button = sidebar_button(sidebar, "📈 Progress", show_progress_page)
+    progress_button.pack(pady=8)
 
     logout_button = ctk.CTkButton(
         sidebar,
         text="Logout",
-        width=180,
-        fg_color="red",
-        hover_color="darkred",
+        width=220,
+        height=42,
+        corner_radius=10,
+        fg_color="#ef4444",
+        hover_color="#dc2626",
         command=show_login
     )
     logout_button.pack(side="bottom", pady=30)
