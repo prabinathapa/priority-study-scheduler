@@ -4,6 +4,26 @@ from tkinter import messagebox, ttk
 from datetime import datetime, timedelta
 import calendar
 
+import os
+import sys
+import shutil
+
+APP_NAME = "Study Scheduler"
+
+def get_app_data_dir():
+    app_support = os.path.expanduser("~/Library/Application Support")
+    app_dir = os.path.join(app_support, APP_NAME)
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
+APP_DATA_DIR = get_app_data_dir()
+
+DATABASE_DIR = os.path.join(APP_DATA_DIR, "database")
+os.makedirs(DATABASE_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATABASE_DIR, "study_scheduler.db")
+SESSION_PATH = os.path.join(APP_DATA_DIR, "session.txt")
+
 current_user_id = None
 
 # App settings
@@ -22,7 +42,7 @@ def clear_main_area():
 
 def save_login_session(user_id):
     try:
-        with open("session.txt", "w") as file:
+        with open(SESSION_PATH, "w") as file:
             file.write(str(user_id))
     except Exception as e:
         messagebox.showerror("Session Error", str(e))
@@ -30,7 +50,7 @@ def save_login_session(user_id):
 
 def load_login_session():
     try:
-        with open("session.txt", "r") as file:
+        with open(SESSION_PATH, "r") as file:
             user_id = file.read().strip()
             if user_id:
                 return int(user_id)
@@ -42,15 +62,36 @@ def load_login_session():
 
 def clear_login_session():
     try:
-        with open("session.txt", "w") as file:
+        with open(SESSION_PATH, "w") as file:
             file.write("")
     except Exception as e:
         messagebox.showerror("Session Error", str(e))
 
-def create_schedule_table():
+def create_tables():
+    print("Creating database tables...")
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                task_name TEXT NOT NULL,
+                deadline TEXT NOT NULL,
+                difficulty INTEGER NOT NULL,
+                study_hours INTEGER NOT NULL,
+                status TEXT DEFAULT 'Pending'
+            )
+        """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS weekly_schedule (
@@ -65,7 +106,6 @@ def create_schedule_table():
             )
         """)
 
-        
         cursor.execute("PRAGMA table_info(weekly_schedule)")
         columns = [col[1] for col in cursor.fetchall()]
 
@@ -82,7 +122,7 @@ def save_weekly_schedule(schedule_data):
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("DELETE FROM weekly_schedule WHERE user_id = ?", (current_user_id,))
@@ -116,7 +156,7 @@ def load_saved_weekly_schedule():
     schedule = {day: [] for day in days}
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -149,7 +189,7 @@ def has_saved_weekly_schedule():
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -171,7 +211,7 @@ def clear_saved_weekly_schedule():
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -189,7 +229,7 @@ def mark_session_completed(session_id):
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -232,7 +272,7 @@ def undo_session_completed(session_id):
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -269,7 +309,7 @@ def get_tasks_for_month(year, month):
     tasks_by_date = {}
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         month_start = f"{year}-{month:02d}-01"
@@ -314,7 +354,7 @@ def get_task_stats():
     progress = 0
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -354,7 +394,7 @@ def get_schedule_completion_stats():
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -381,7 +421,7 @@ def get_schedule_completion_stats():
     
 def get_task_progress(task_id):
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         # total sessions
@@ -417,7 +457,7 @@ def load_tasks_into_tree(tree):
         for item in tree.get_children():
             tree.delete(item)
 
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -469,7 +509,7 @@ def get_pending_tasks():
     global current_user_id
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -516,7 +556,7 @@ def generate_weekly_schedule_data():
     MAX_DAILY_HOURS = 6
 
     try:
-        connection = sqlite3.connect("database/study_scheduler.db")
+        connection = sqlite3.connect(DB_PATH)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -741,7 +781,7 @@ def show_tasks_page():
             return
 
         try:
-            connection = sqlite3.connect("database/study_scheduler.db")
+            connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
             cursor.execute("""
@@ -774,7 +814,7 @@ def show_tasks_page():
         task_id = task_values[0]
 
         try:
-            connection = sqlite3.connect("database/study_scheduler.db")
+            connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
             cursor.execute(
                 "DELETE FROM tasks WHERE id = ? AND user_id = ?",
@@ -800,7 +840,7 @@ def show_tasks_page():
         task_name = task_values[1]
 
         try:
-            connection = sqlite3.connect("database/study_scheduler.db")
+            connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
             # 🔍 Check if this task has any incomplete sessions
@@ -1509,7 +1549,7 @@ def show_register():
             return
 
         try:
-            connection = sqlite3.connect("database/study_scheduler.db")
+            connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
             cursor.execute(
@@ -1575,7 +1615,7 @@ def show_login():
             return
 
         try:
-            connection = sqlite3.connect("database/study_scheduler.db")
+            connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
             cursor.execute(
@@ -1695,7 +1735,7 @@ def show_main_app():
 
 
 # Start app
-create_schedule_table()
+create_tables()
 
 saved_user_id = load_login_session()
 
