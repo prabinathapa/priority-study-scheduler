@@ -8,6 +8,10 @@ import os
 import sys
 import shutil
 
+import hashlib
+import secrets
+import re
+
 APP_NAME = "Study Scheduler"
 
 def get_app_data_dir():
@@ -117,6 +121,92 @@ def create_tables():
 
     except Exception as e:
         messagebox.showerror("Database Error", str(e))
+
+def show_task_reminders():
+    global current_user_id
+
+    try:
+        today = datetime.today().date()
+
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT task_name, deadline, status
+            FROM tasks
+            WHERE user_id = ?
+              AND status = 'Pending'
+            ORDER BY deadline ASC
+        """, (current_user_id,))
+
+        tasks = cursor.fetchall()
+        connection.close()
+
+        reminders = []
+
+        for task_name, deadline, status in tasks:
+            deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+            days_left = (deadline_date - today).days
+
+            if days_left < 0:
+                reminders.append(f"⚠️ {task_name} is overdue! Due: {deadline}")
+            elif days_left == 0:
+                reminders.append(f"📌 {task_name} is due today!")
+            elif days_left <= 2:
+                reminders.append(f"⏰ {task_name} is due in {days_left} day(s).")
+
+        if reminders:
+            messagebox.showinfo(
+                "Task Reminders",
+                "\n\n".join(reminders)
+            )
+
+    except Exception as e:
+        messagebox.showerror("Reminder Error", str(e))
+
+def update_overdue_tasks():
+    global current_user_id
+
+    try:
+        today = datetime.today().date()
+
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT id, deadline, status
+            FROM tasks
+            WHERE user_id = ?
+        """, (current_user_id,))
+
+        tasks = cursor.fetchall()
+
+        for task_id, deadline, status in tasks:
+
+            if status == "Completed":
+                continue
+
+            deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+
+            if deadline_date < today:
+                cursor.execute("""
+                    UPDATE tasks
+                    SET status = 'Overdue'
+                    WHERE id = ?
+                """, (task_id,))
+
+            else:
+                cursor.execute("""
+                    UPDATE tasks
+                    SET status = 'Pending'
+                    WHERE id = ?
+                """, (task_id,))
+
+        connection.commit()
+        connection.close()
+
+    except Exception as e:
+        messagebox.showerror("Overdue Error", str(e))        
 
 def save_weekly_schedule(schedule_data):
     global current_user_id
@@ -450,6 +540,48 @@ def get_task_progress(task_id):
     except Exception:
         return "Error"
 
+def search_tasks_into_tree(tree, search_text):
+    global current_user_id
+
+    try:
+        for item in tree.get_children():
+            tree.delete(item)
+
+        if search_text.strip() == "":
+            load_tasks_into_tree(tree)
+            return
+
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT id, task_name, deadline, difficulty, study_hours, status
+            FROM tasks
+            WHERE user_id = ?
+              AND task_name LIKE ? COLLATE NOCASE
+            ORDER BY id DESC
+        """, (current_user_id, f"%{search_text.strip()}%"))
+
+        tasks = cursor.fetchall()
+        connection.close()
+
+        for task in tasks:
+            task_id = task[0]
+            progress = get_task_progress(task_id)
+
+            tree.insert("", "end", values=(
+                task[0],
+                task[1],
+                task[2],
+                task[3],
+                task[4],
+                progress,
+                task[5]
+            ))
+
+    except Exception as e:
+        messagebox.showerror("Search Error", str(e))
+
 def load_tasks_into_tree(tree):
     global current_user_id
 
@@ -464,19 +596,19 @@ def load_tasks_into_tree(tree):
             SELECT id, task_name, deadline, difficulty, study_hours, status
             FROM tasks
             WHERE user_id = ?
-            ORDER BY id DESC
+            ORDER BY id ASC
         """, (current_user_id,))
 
         tasks = cursor.fetchall()
         connection.close()
 
-        for task in tasks:
-            task_id = task[0]
+        for index, task in enumerate(tasks, start=1):
+            real_task_id = task[0]
 
-            progress = get_task_progress(task_id)
+            progress = get_task_progress(real_task_id)
 
             new_row = (
-                task[0],  # ID
+                index,  # Display row number 
                 task[1],  # Name
                 task[2],  # Deadline
                 task[3],  # Difficulty
@@ -485,7 +617,7 @@ def load_tasks_into_tree(tree):
                 task[5]   # Status
             )
 
-            tree.insert("", "end", values=new_row)
+            tree.insert("", "end", iid=str(real_task_id), values=new_row)
 
     except Exception as e:
         messagebox.showerror("Load Error", str(e))
@@ -550,7 +682,7 @@ def calculate_task_priority(task):
         return 0
 
 
-def generate_weekly_schedule_data():
+def generate_weekly_schedule_data(excluded_days=None):
     global current_user_id
 
     MAX_DAILY_HOURS = 6
@@ -562,7 +694,8 @@ def generate_weekly_schedule_data():
         cursor.execute("""
             SELECT id, task_name, deadline, difficulty, study_hours
             FROM tasks
-            WHERE user_id = ? AND status = 'Pending'
+            WHERE user_id = ?
+                        AND status IN ('Pending', 'Overdue')
         """, (current_user_id,))
 
         tasks = cursor.fetchall()
@@ -581,8 +714,26 @@ def generate_weekly_schedule_data():
         }
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    schedule = {day: [] for day in days}
-    daily_hours = {day: 0 for day in days}
+
+    if excluded_days is None:
+        excluded_days = []
+
+    days = [day for day in days if day not in excluded_days]
+
+    if not days:
+        messagebox.showwarning("Schedule Error", "You must allow at least one study day.")
+        return {
+            "Monday": [],
+            "Tuesday": [],
+            "Wednesday": [],
+            "Thursday": [],
+            "Friday": [],
+            "Saturday": [],
+            "Sunday": []
+        }
+    all_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    schedule = {day: [] for day in all_days}
+    daily_hours = {day: 0 for day in all_days}
 
     today = datetime.today().date()
 
@@ -709,14 +860,18 @@ def show_dashboard_page():
 def show_tasks_page():
     clear_main_area()
 
+    page_frame = ctk.CTkScrollableFrame(content_frame, fg_color="transparent")
+    page_frame.pack(fill="both", expand=True)
+
     title = ctk.CTkLabel(
-        content_frame,
+        page_frame,
         text="Task Management",
         font=ctk.CTkFont(size=28, weight="bold")
     )
     title.pack(anchor="w", padx=30, pady=(30, 20))
 
-    form_frame = ctk.CTkFrame(content_frame, fg_color="#2b2b2b", corner_radius=15)
+    # ---------- FORM ----------
+    form_frame = ctk.CTkFrame(page_frame, fg_color="#2b2b2b", corner_radius=15)
     form_frame.pack(padx=30, pady=10, fill="x")
 
     ctk.CTkLabel(form_frame, text="Task Name").grid(row=0, column=0, padx=20, pady=15, sticky="w")
@@ -735,16 +890,32 @@ def show_tasks_page():
     hours_entry = ctk.CTkEntry(form_frame, width=250, placeholder_text="Enter study hours")
     hours_entry.grid(row=3, column=1, padx=20, pady=15)
 
-    table_frame = ctk.CTkFrame(content_frame, corner_radius=15)
-    table_frame.pack(padx=30, pady=25, fill="both", expand=True)
+    # ---------- BUTTON ROW ----------
+    button_row = ctk.CTkFrame(form_frame, fg_color="transparent")
+    button_row.grid(row=4, column=0, columnspan=2, pady=10)
 
-    columns = ("ID", "Task Name", "Deadline", "Difficulty", "Hours", "Progress", "Status")
+    # ---------- SEARCH BAR ----------
+    search_frame = ctk.CTkFrame(page_frame, fg_color="transparent")
+    search_frame.pack(padx=30, pady=(5, 5), fill="x")
+
+    search_entry = ctk.CTkEntry(
+        search_frame,
+        width=300,
+        placeholder_text="Search task by name"
+    )
+    search_entry.pack(side="left", padx=(0, 10))
+
+    # ---------- TABLE ----------
+    table_frame = ctk.CTkFrame(page_frame, corner_radius=15)
+    table_frame.pack(padx=30, pady=10, fill="both", expand=True)
+
+    columns = ("No.", "Task Name", "Deadline", "Difficulty", "Hours", "Progress", "Status")
     tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
 
     for col in columns:
         tree.heading(col, text=col)
 
-    tree.column("ID", width=60, anchor="center")
+    tree.column("No.", width=60, anchor="center")
     tree.column("Task Name", width=240, anchor="center")
     tree.column("Deadline", width=140, anchor="center")
     tree.column("Difficulty", width=100, anchor="center")
@@ -753,6 +924,27 @@ def show_tasks_page():
     tree.column("Status", width=120, anchor="center")
 
     tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+    search_button = ctk.CTkButton(
+        search_frame,
+        text="Search",
+        width=120,
+        command=lambda: search_tasks_into_tree(tree, search_entry.get().strip())
+    )
+    search_button.pack(side="left", padx=5)
+
+    clear_search_button = ctk.CTkButton(
+        search_frame,
+        text="Clear",
+        width=120,
+        fg_color="#4b5563",
+        hover_color="#374151",
+        command=lambda: [
+            search_entry.delete(0, "end"),
+            load_tasks_into_tree(tree)
+        ]
+    )
+    clear_search_button.pack(side="left", padx=5)
 
     def add_task_v2():
         global current_user_id
@@ -804,6 +996,151 @@ def show_tasks_page():
         except Exception as e:
             messagebox.showerror("Database Error", str(e))
 
+    def edit_selected_task_v2():
+        selected_item = tree.focus()
+
+        if not selected_item:
+            selected = tree.selection()
+            if selected:
+                selected_item = selected[0]
+   
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a task first.")
+            return
+
+        task_id = selected_item
+        task_values = tree.item(selected_item, "values")
+
+        if not task_values:
+            messagebox.showwarning("No Selection", "Please select a valid task row.")
+            return
+
+        current_task_name = task_values[1]
+        current_deadline = task_values[2]
+        current_difficulty = task_values[3]
+        current_hours = task_values[4]
+
+        edit_window = ctk.CTkToplevel(app)
+        edit_window.title("Edit Task")
+        edit_window.geometry("420x500")
+        edit_window.transient(app)
+        edit_window.lift()
+        edit_window.focus()
+
+        ctk.CTkLabel(
+            edit_window,
+            text="Edit Task",
+            font=ctk.CTkFont(size=22, weight="bold")
+        ).pack(pady=(25, 15))
+
+        ctk.CTkLabel(
+            edit_window,
+            text="Task Name",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=80, pady=(8, 3))
+
+        task_name_entry = ctk.CTkEntry(edit_window, width=260)
+        task_name_entry.pack(pady=(0, 10))
+        task_name_entry.insert(0, str(current_task_name))
+
+        ctk.CTkLabel(
+            edit_window,
+            text="Deadline (YYYY-MM-DD)",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=80, pady=(8, 3))
+
+        deadline_entry = ctk.CTkEntry(edit_window, width=260)
+        deadline_entry.pack(pady=(0, 10))
+        deadline_entry.insert(0, str(current_deadline))
+
+        ctk.CTkLabel(
+            edit_window,
+            text="Difficulty (1 - 5)",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=80, pady=(8, 3))
+
+        difficulty_entry = ctk.CTkEntry(edit_window, width=260)
+        difficulty_entry.pack(pady=(0, 10))
+        difficulty_entry.insert(0, str(current_difficulty))
+
+        ctk.CTkLabel(
+            edit_window,
+            text="Study Hours",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=80, pady=(8, 3))
+
+        hours_entry = ctk.CTkEntry(edit_window, width=260)
+        hours_entry.pack(pady=(0, 15))
+        hours_entry.insert(0, str(current_hours))
+
+        def save_task_changes():
+            new_task_name = task_name_entry.get().strip()
+            new_deadline = deadline_entry.get().strip()
+            new_difficulty = difficulty_entry.get().strip()
+            new_hours = hours_entry.get().strip()
+
+            if not new_task_name or not new_deadline or not new_difficulty or not new_hours:
+                messagebox.showwarning("Missing Information", "Please fill in all fields.")
+                return
+
+            try:
+                datetime.strptime(new_deadline, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showwarning("Invalid Date", "Deadline must be in YYYY-MM-DD format.")
+                return
+
+            if not new_difficulty.isdigit() or not (1 <= int(new_difficulty) <= 5):
+                messagebox.showwarning("Invalid Difficulty", "Difficulty must be between 1 and 5.")
+                return
+
+            if not new_hours.isdigit() or int(new_hours) <= 0:
+                messagebox.showwarning("Invalid Hours", "Study hours must be a positive number.")
+                return
+
+            try:
+                connection = sqlite3.connect(DB_PATH)
+                cursor = connection.cursor()
+
+                cursor.execute("""
+                    UPDATE tasks
+                    SET task_name = ?,
+                        deadline = ?,
+                        difficulty = ?,
+                        study_hours = ?
+                    WHERE id = ? AND user_id = ?
+                """, (
+                    new_task_name,
+                    new_deadline,
+                    int(new_difficulty),
+                    int(new_hours),
+                    task_id,
+                    current_user_id
+                ))
+
+                connection.commit()
+                connection.close()
+
+                clear_saved_weekly_schedule()
+                update_overdue_tasks()
+
+                messagebox.showinfo(
+                    "Task Updated",
+                    "Task updated successfully. Your weekly schedule was cleared. Please generate a new schedule."
+                )
+
+                edit_window.destroy()
+                load_tasks_into_tree(tree)
+
+            except Exception as e:
+                messagebox.showerror("Update Error", str(e))
+
+        ctk.CTkButton(
+            edit_window,
+            text="Save Changes",
+            width=220,
+            command=save_task_changes
+        ).pack(pady=20)
+
     def delete_selected_task_v2():
         selected_item = tree.selection()
         if not selected_item:
@@ -811,7 +1148,7 @@ def show_tasks_page():
             return
 
         task_values = tree.item(selected_item[0], "values")
-        task_id = task_values[0]
+        task_id = tree.focus()
 
         try:
             connection = sqlite3.connect(DB_PATH)
@@ -836,7 +1173,7 @@ def show_tasks_page():
             return
 
         task_values = tree.item(selected_item[0], "values")
-        task_id = task_values[0]
+        task_id = tree.focus()
         task_name = task_values[1]
 
         try:
@@ -914,6 +1251,16 @@ def show_tasks_page():
     )
     delete_button.pack(side="left", padx=10)
 
+    edit_button = ctk.CTkButton(
+        button_row,
+        text="Edit Task",
+        width=160,
+        fg_color="#f59e0b",
+        hover_color="#d97706",
+        command=edit_selected_task_v2
+    )
+    edit_button.pack(side="left", padx=10)
+
     load_tasks_into_tree(tree)
 
 def show_schedule_page():
@@ -941,6 +1288,30 @@ def show_schedule_page():
     schedule_frame.pack(padx=30, pady=20, fill="both", expand=True)
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    availability_frame = ctk.CTkFrame(content_frame, fg_color="#1f2937", corner_radius=12)
+    availability_frame.pack(anchor="w", padx=30, pady=(5, 10), fill="x")
+
+    ctk.CTkLabel(
+        availability_frame,
+        text="Select days you do NOT want study sessions:",
+        font=ctk.CTkFont(size=14, weight="bold")
+    ).pack(anchor="w", padx=15, pady=(10, 5))
+
+    day_vars = {}
+
+    checkbox_row = ctk.CTkFrame(availability_frame, fg_color="transparent")
+    checkbox_row.pack(anchor="w", padx=15, pady=(0, 10))
+
+    for day in days:
+        var = ctk.BooleanVar(value=False)
+        day_vars[day] = var
+
+        ctk.CTkCheckBox(
+            checkbox_row,
+            text=day,
+            variable=var
+        ).pack(side="left", padx=8)
 
     def render_schedule(schedule_data):
         for widget in schedule_frame.winfo_children():
@@ -1030,7 +1401,8 @@ def show_schedule_page():
                 ).pack(pady=20)
 
     def generate_schedule_action(show_popup=True):
-        schedule_data = generate_weekly_schedule_data()
+        excluded_days = [day for day, var in day_vars.items() if var.get()]
+        schedule_data = generate_weekly_schedule_data(excluded_days) 
         save_weekly_schedule(schedule_data)
         saved_schedule = load_saved_weekly_schedule()
         render_schedule(saved_schedule)
@@ -1511,6 +1883,48 @@ def show_progress_page():
         font=ctk.CTkFont(size=16)
     ).pack(anchor="w", padx=20, pady=10)
 
+def validate_password(password):
+    if len(password) < 8:
+        return "Password must be at least 8 characters long."
+    if not re.search(r"[A-Z]", password):
+        return "Password must contain at least one uppercase letter."
+    if not re.search(r"[a-z]", password):
+        return "Password must contain at least one lowercase letter."
+    if not re.search(r"[0-9]", password):
+        return "Password must contain at least one number."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+        return "Password must contain at least one special character."
+    return None
+
+
+def hash_password(password):
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode(),
+        salt.encode(),
+        100000
+    ).hex()
+    return f"{salt}${password_hash}"
+
+
+def verify_password(password, stored_password):
+    try:
+        if "$" not in stored_password:
+            return password == stored_password
+
+        salt, saved_hash = stored_password.split("$")
+        password_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode(),
+            salt.encode(),
+            100000
+        ).hex()
+
+        return password_hash == saved_hash
+    except Exception:
+        return False
+
 def show_register():
     register_window = ctk.CTkToplevel(app)
     register_window.title("Register")
@@ -1544,6 +1958,13 @@ def show_register():
         username = username_entry.get().strip()
         password = password_entry.get().strip()
 
+        password_error = validate_password(password)
+        if password_error:
+            messagebox.showwarning("Weak Password", password_error)
+            return
+   
+        hashed_password = hash_password(password)
+
         if username == "" or password == "":
             messagebox.showwarning("Missing Information", "Please fill in all fields.")
             return
@@ -1554,7 +1975,7 @@ def show_register():
 
             cursor.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
-                (username, password)
+                (username, hashed_password)
             )
 
             connection.commit()
@@ -1577,6 +1998,102 @@ def show_register():
     )
     register_button.pack(pady=20)
 
+def show_forgot_password():
+    forgot_window = ctk.CTkToplevel(app)
+    forgot_window.title("Forgot Password")
+    forgot_window.geometry("420x420")
+    forgot_window.transient(app)
+    forgot_window.lift()
+    forgot_window.focus()
+
+    ctk.CTkLabel(
+        forgot_window,
+        text="Reset Password",
+        font=ctk.CTkFont(size=24, weight="bold")
+    ).pack(pady=(30, 20))
+
+    username_entry = ctk.CTkEntry(
+        forgot_window,
+        width=280,
+        height=40,
+        placeholder_text="Username"
+    )
+    username_entry.pack(pady=10)
+
+    new_password_entry = ctk.CTkEntry(
+        forgot_window,
+        width=280,
+        height=40,
+        placeholder_text="New Password",
+        show="*"
+    )
+    new_password_entry.pack(pady=10)
+
+    confirm_password_entry = ctk.CTkEntry(
+        forgot_window,
+        width=280,
+        height=40,
+        placeholder_text="Confirm New Password",
+        show="*"
+    )
+    confirm_password_entry.pack(pady=10)
+
+    def reset_password():
+        username = username_entry.get().strip()
+        new_password = new_password_entry.get().strip()
+        confirm_password = confirm_password_entry.get().strip()
+
+        if not username or not new_password or not confirm_password:
+            messagebox.showwarning("Missing Information", "Please fill in all fields.")
+            return
+
+        if new_password != confirm_password:
+            messagebox.showwarning("Password Error", "Passwords do not match.")
+            return
+
+        password_error = validate_password(new_password)
+        if password_error:
+            messagebox.showwarning("Weak Password", password_error)
+            return
+
+        try:
+            connection = sqlite3.connect(DB_PATH)
+            cursor = connection.cursor()
+
+            cursor.execute(
+                "SELECT id FROM users WHERE username = ?",
+                (username,)
+            )
+            user = cursor.fetchone()
+
+            if not user:
+                messagebox.showerror("User Not Found", "No account found with this username.")
+                connection.close()
+                return
+
+            hashed_new_password = hash_password(new_password)
+
+            cursor.execute(
+                "UPDATE users SET password = ? WHERE id = ?",
+                (hashed_new_password, user[0])
+            )
+
+            connection.commit()
+            connection.close()
+
+            messagebox.showinfo("Success", "Password reset successfully. You can now login.")
+            forgot_window.destroy()
+
+        except Exception as e:
+            messagebox.showerror("Reset Error", str(e))
+
+    ctk.CTkButton(
+        forgot_window,
+        text="Reset Password",
+        width=280,
+        height=40,
+        command=reset_password
+    ).pack(pady=20)
 
 def show_login():
     for widget in app.winfo_children():
@@ -1619,14 +2136,14 @@ def show_login():
             cursor = connection.cursor()
 
             cursor.execute(
-                "SELECT * FROM users WHERE username = ? AND password = ?",
-                (username, password)
+                "SELECT * FROM users WHERE username = ?",
+                (username,)
             )
 
             user = cursor.fetchone()
             connection.close()
 
-            if user:
+            if user and verify_password(password, user[2]):
                 global current_user_id
                 current_user_id = user[0]
                 save_login_session(current_user_id)
@@ -1648,6 +2165,18 @@ def show_login():
     )
     login_button.pack(pady=(20, 10))
 
+    forgot_button = ctk.CTkButton(
+        login_frame,
+        text="Forgot Password?",
+        width=300,
+        height=36,
+        fg_color="transparent",
+        hover_color="#374151",
+        text_color="#60a5fa",
+        command=show_forgot_password
+    )
+    forgot_button.pack(pady=(0, 10)) 
+
     register_button = ctk.CTkButton(
         login_frame,
         text="Register",
@@ -1659,6 +2188,103 @@ def show_login():
     )
     register_button.pack(pady=10)
 
+def show_change_password_page():
+    clear_main_area()
+
+    title = ctk.CTkLabel(
+        content_frame,
+        text="Change Password",
+        font=ctk.CTkFont(size=28, weight="bold")
+    )
+    title.pack(anchor="w", padx=30, pady=(30, 20))
+
+    form_frame = ctk.CTkFrame(content_frame, fg_color="#2b2b2b", corner_radius=15)
+    form_frame.pack(padx=30, pady=20, fill="x")
+
+    old_password_entry = ctk.CTkEntry(
+        form_frame,
+        width=300,
+        placeholder_text="Current Password",
+        show="*"
+    )
+    old_password_entry.pack(pady=15)
+
+    new_password_entry = ctk.CTkEntry(
+        form_frame,
+        width=300,
+        placeholder_text="New Password",
+        show="*"
+    )
+    new_password_entry.pack(pady=15)
+
+    confirm_password_entry = ctk.CTkEntry(
+        form_frame,
+        width=300,
+        placeholder_text="Confirm New Password",
+        show="*"
+    )
+    confirm_password_entry.pack(pady=15)
+
+    def change_password():
+        old_password = old_password_entry.get().strip()
+        new_password = new_password_entry.get().strip()
+        confirm_password = confirm_password_entry.get().strip()
+
+        if not old_password or not new_password or not confirm_password:
+            messagebox.showwarning("Missing Information", "Please fill in all fields.")
+            return
+
+        if new_password != confirm_password:
+            messagebox.showwarning("Password Error", "New passwords do not match.")
+            return
+
+        password_error = validate_password(new_password)
+        if password_error:
+            messagebox.showwarning("Weak Password", password_error)
+            return
+
+        try:
+            connection = sqlite3.connect(DB_PATH)
+            cursor = connection.cursor()
+
+            cursor.execute(
+                "SELECT password FROM users WHERE id = ?",
+                (current_user_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row or not verify_password(old_password, row[0]):
+                messagebox.showerror("Password Error", "Current password is incorrect.")
+                connection.close()
+                return
+
+            new_hashed_password = hash_password(new_password)
+
+            cursor.execute(
+                "UPDATE users SET password = ? WHERE id = ?",
+                (new_hashed_password, current_user_id)
+            )
+
+            connection.commit()
+            connection.close()
+
+            messagebox.showinfo("Success", "Password changed successfully.")
+
+            old_password_entry.delete(0, "end")
+            new_password_entry.delete(0, "end")
+            confirm_password_entry.delete(0, "end")
+
+        except Exception as e:
+            messagebox.showerror("Password Error", str(e))
+
+    ctk.CTkButton(
+        form_frame,
+        text="Change Password",
+        width=220,
+        fg_color="#3b82f6",
+        hover_color="#2563eb",
+        command=change_password
+    ).pack(pady=20)
 
 def show_main_app():
     global content_frame
@@ -1731,7 +2357,9 @@ def show_main_app():
     content_frame = ctk.CTkFrame(app, corner_radius=0)
     content_frame.pack(side="right", fill="both", expand=True)
 
+    update_overdue_tasks()
     show_dashboard_page()
+    app.after(500, show_task_reminders)
 
 
 # Start app
