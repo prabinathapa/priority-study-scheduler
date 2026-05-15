@@ -110,6 +110,15 @@ def create_tables():
             )
         """)
 
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = [col[1] for col in cursor.fetchall()]
+
+        if "security_question" not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN security_question TEXT")
+
+        if "security_answer_hash" not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN security_answer_hash TEXT")
+
         cursor.execute("PRAGMA table_info(weekly_schedule)")
         columns = [col[1] for col in cursor.fetchall()]
 
@@ -787,6 +796,29 @@ def generate_weekly_schedule_data(excluded_days=None):
                 break
 
     return schedule
+def get_user_account_details():
+    global current_user_id
+
+    try:
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT username
+            FROM users
+            WHERE id = ?
+        """, (current_user_id,))
+
+        row = cursor.fetchone()
+        connection.close()
+
+        if row:
+            return row[0]
+
+        return "Unknown"
+
+    except Exception:
+        return "Unknown"
 
 def show_dashboard_page():
     clear_main_area()
@@ -1924,12 +1956,20 @@ def verify_password(password, stored_password):
         return password_hash == saved_hash
     except Exception:
         return False
+    
+
+def hash_security_answer(answer):
+    return hash_password(answer.strip().lower())
+
+
+def verify_security_answer(answer, stored_hash):
+    return verify_password(answer.strip().lower(), stored_hash)    
 
 def show_register():
     register_window = ctk.CTkToplevel(app)
     register_window.title("Register")
-    register_window.geometry("400x350")
-
+    register_window.geometry("560x550")
+    
     title_label = ctk.CTkLabel(
         register_window,
         text="Create Account",
@@ -1939,7 +1979,7 @@ def show_register():
 
     username_entry = ctk.CTkEntry(
         register_window,
-        width=260,
+        width=340,
         height=40,
         placeholder_text="New Username"
     )
@@ -1947,35 +1987,82 @@ def show_register():
 
     password_entry = ctk.CTkEntry(
         register_window,
-        width=260,
+        width=340,
         height=40,
         placeholder_text="New Password",
         show="*"
     )
     password_entry.pack(pady=10)
 
+    ctk.CTkLabel(
+    register_window,
+    text="Security Question",
+    font=ctk.CTkFont(size=14, weight="bold")
+    ).pack(pady=(10, 5))
+
+    security_question_var = ctk.StringVar(value="Favourite subject?")
+
+    ctk.CTkLabel(
+        register_window,
+        text="Choose a Security Question",
+        font=ctk.CTkFont(size=14, weight="bold")
+    ).pack(pady=(10, 5))
+
+    question_frame = ctk.CTkFrame(register_window, fg_color="transparent")
+    question_frame.pack(pady=(0, 10))
+
+    questions = [
+        "Favourite subject?",
+        "First school name?",
+        "Favourite teacher's name?",
+        "Pet name?"
+    ]
+
+    for question in questions:
+        ctk.CTkRadioButton(
+            question_frame,
+            text=question,
+            variable=security_question_var,
+            value=question
+        ).pack(anchor="w", pady=3)
+
+    security_answer_entry = ctk.CTkEntry(
+    register_window,
+    width=340,
+    height=40,
+    placeholder_text="Security Answer",
+    show="*"
+)   
+
+    security_answer_entry.pack(pady=10)
+
     def register_user():
+
         username = username_entry.get().strip()
         password = password_entry.get().strip()
+        security_question = security_question_var.get()
+        security_answer = security_answer_entry.get().strip()
 
+
+        if username == "" or password == "" or security_answer == "":
+            messagebox.showwarning("Missing Information", "Please fill in all fields.")
+            return
+        
         password_error = validate_password(password)
         if password_error:
             messagebox.showwarning("Weak Password", password_error)
             return
    
         hashed_password = hash_password(password)
-
-        if username == "" or password == "":
-            messagebox.showwarning("Missing Information", "Please fill in all fields.")
-            return
+        hashed_security_answer = hash_security_answer(security_answer)
 
         try:
             connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
             cursor.execute(
-                "INSERT INTO users (username, password) VALUES (?, ?)",
-                (username, hashed_password)
+                "INSERT INTO users (username, password, security_question, security_answer_hash) VALUES (?, ?, ?, ?)",
+                (username, hashed_password, security_question, hashed_security_answer)
             )
 
             connection.commit()
@@ -2001,50 +2088,129 @@ def show_register():
 def show_forgot_password():
     forgot_window = ctk.CTkToplevel(app)
     forgot_window.title("Forgot Password")
-    forgot_window.geometry("420x420")
+    forgot_window.geometry("450x500")
     forgot_window.transient(app)
     forgot_window.lift()
     forgot_window.focus()
+
+    stored_answer_hash = None
 
     ctk.CTkLabel(
         forgot_window,
         text="Reset Password",
         font=ctk.CTkFont(size=24, weight="bold")
-    ).pack(pady=(30, 20))
+    ).pack(pady=(25, 15))
 
     username_entry = ctk.CTkEntry(
         forgot_window,
-        width=280,
+        width=300,
         height=40,
         placeholder_text="Username"
     )
-    username_entry.pack(pady=10)
+    username_entry.pack(pady=8)
+
+    question_label = ctk.CTkLabel(
+        forgot_window,
+        text="Enter your username and click Verify User",
+        text_color="gray",
+        wraplength=330
+    )
+    question_label.pack(pady=8)
+
+    answer_entry = ctk.CTkEntry(
+        forgot_window,
+        width=300,
+        height=40,
+        placeholder_text="Security Answer",
+        show="*",
+        state="disabled"
+    )
+    answer_entry.pack(pady=8)
 
     new_password_entry = ctk.CTkEntry(
         forgot_window,
-        width=280,
+        width=300,
         height=40,
         placeholder_text="New Password",
-        show="*"
+        show="*",
+        state="disabled"
     )
-    new_password_entry.pack(pady=10)
+    new_password_entry.pack(pady=8)
 
     confirm_password_entry = ctk.CTkEntry(
         forgot_window,
-        width=280,
+        width=300,
         height=40,
         placeholder_text="Confirm New Password",
-        show="*"
+        show="*",
+        state="disabled"
     )
-    confirm_password_entry.pack(pady=10)
+    confirm_password_entry.pack(pady=8)
+
+    def verify_user():
+        nonlocal stored_answer_hash
+
+        username = username_entry.get().strip()
+
+        if not username:
+            messagebox.showwarning("Missing Username", "Please enter your username.")
+            return
+
+        try:
+            connection = sqlite3.connect(DB_PATH)
+            cursor = connection.cursor()
+
+            cursor.execute("""
+                SELECT security_question, security_answer_hash
+                FROM users
+                WHERE username = ?
+            """, (username,))
+
+            row = cursor.fetchone()
+            connection.close()
+
+            if not row:
+                messagebox.showerror("User Error", "No account found with this username.")
+                return
+
+            security_question, security_answer_hash = row
+
+            if not security_question or not security_answer_hash:
+                messagebox.showerror(
+                    "Security Error",
+                    "This account does not have a security question set."
+                )
+                return
+
+            stored_answer_hash = security_answer_hash
+
+            question_label.configure(
+                text=f"Security Question:\n{security_question}"
+            )
+
+            answer_entry.configure(state="normal")
+            new_password_entry.configure(state="normal")
+            confirm_password_entry.configure(state="normal")
+
+        except Exception as e:
+            messagebox.showerror("Verification Error", str(e))
 
     def reset_password():
         username = username_entry.get().strip()
+        answer = answer_entry.get().strip()
         new_password = new_password_entry.get().strip()
         confirm_password = confirm_password_entry.get().strip()
 
-        if not username or not new_password or not confirm_password:
+        if stored_answer_hash is None:
+            messagebox.showwarning("Verify First", "Please verify your username first.")
+            return
+
+        if not answer or not new_password or not confirm_password:
             messagebox.showwarning("Missing Information", "Please fill in all fields.")
+            return
+
+        if not verify_security_answer(answer, stored_answer_hash):
+            messagebox.showerror("Security Error", "Security answer is incorrect.")
             return
 
         if new_password != confirm_password:
@@ -2057,26 +2223,16 @@ def show_forgot_password():
             return
 
         try:
+            hashed_new_password = hash_password(new_password)
+
             connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
 
-            cursor.execute(
-                "SELECT id FROM users WHERE username = ?",
-                (username,)
-            )
-            user = cursor.fetchone()
-
-            if not user:
-                messagebox.showerror("User Not Found", "No account found with this username.")
-                connection.close()
-                return
-
-            hashed_new_password = hash_password(new_password)
-
-            cursor.execute(
-                "UPDATE users SET password = ? WHERE id = ?",
-                (hashed_new_password, user[0])
-            )
+            cursor.execute("""
+                UPDATE users
+                SET password = ?
+                WHERE username = ?
+            """, (hashed_new_password, username))
 
             connection.commit()
             connection.close()
@@ -2089,11 +2245,21 @@ def show_forgot_password():
 
     ctk.CTkButton(
         forgot_window,
+        text="Verify User",
+        width=300,
+        height=38,
+        command=verify_user
+    ).pack(pady=(10, 5))
+
+    ctk.CTkButton(
+        forgot_window,
         text="Reset Password",
-        width=280,
-        height=40,
+        width=300,
+        height=38,
+        fg_color="#16a34a",
+        hover_color="#15803d",
         command=reset_password
-    ).pack(pady=20)
+    ).pack(pady=10)
 
 def show_login():
     for widget in app.winfo_children():
@@ -2285,6 +2451,7 @@ def show_change_password_page():
         hover_color="#2563eb",
         command=change_password
     ).pack(pady=20)
+
 
 def show_main_app():
     global content_frame
